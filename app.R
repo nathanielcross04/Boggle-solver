@@ -434,7 +434,7 @@ server <- function(input, output, session) {
 
     # Longest words first, alphabetical within each length
     df <- df[order(-nchar(df$word), df$word), , drop = FALSE]
-    data.frame(Word = df$word, Letters = nchar(df$word), stringsAsFactors = FALSE)
+    data.frame(Words = df$word, Letters = nchar(df$word), stringsAsFactors = FALSE)
   })
 
   output$has_results <- reactive(!is.null(results()))
