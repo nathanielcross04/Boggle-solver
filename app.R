@@ -1,8 +1,11 @@
 # =============================================================================
 # Boggle Solver - single-file Shiny app
 #
+# Hosted on Posit Connect Cloud (a normal Shiny server app).
+#
 # First run (locally): downloads the dictionary + frequency list and caches
-# them in ./data/. Commit the data/ folder so the host never has to rebuild.
+# them in ./data/. Commit data/sets.rds and data/freq.rds so the host never
+# has to rebuild them. Everything outside server() runs once per R process.
 # =============================================================================
 
 library(shiny)
@@ -33,7 +36,7 @@ make_sets_fast <- function(words) {
   prefixes <- unique(unlist(lapply(seq_len(max_len), function(k) {
     unique(substr(words, 1, k))
   })))
-  
+
   to_env <- function(x) {
     list2env(setNames(as.list(rep(TRUE, length(x))), x),
              envir = new.env(hash = TRUE))
@@ -43,12 +46,12 @@ make_sets_fast <- function(words) {
 
 build_data <- function() {
   message("Building data (first run only)...")
-  
+
   # Dictionary: keep the first token on each line, uppercase letters only, 3+ long
   raw   <- readLines(DICT_URL, warn = FALSE)
   words <- toupper(sub("[[:space:]].*$", "", trimws(raw)))
   words <- unique(words[grepl("^[A-Z]{3,}$", words)])
-  
+
   # Frequency list -> rank among valid dictionary words
   # Use a local copy of Norvig's file if present (download it in your browser
   # and save as count_1w.txt next to app.R); otherwise download it, posing as
@@ -57,7 +60,7 @@ build_data <- function() {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"))
   on.exit(options(old_ua), add = TRUE)
-  
+
   freq_source <- if (file.exists("count_1w.txt")) "count_1w.txt" else FREQ_URL
   lines <- readLines(freq_source, warn = FALSE)
   if (any(grepl("<html|<!doctype", head(lines, 5), ignore.case = TRUE))) {
@@ -73,21 +76,21 @@ build_data <- function() {
   )
   freq <- freq[!is.na(freq$count), ]
   stopifnot("Frequency list parsed to 0 rows - check FREQ_URL" = nrow(freq) > 0)
-  
+
   freq <- freq[freq$word %in% words, ]
   stopifnot("No frequency words matched the dictionary" = nrow(freq) > 0)
   freq <- freq[!duplicated(freq$word), ]
   freq <- freq[order(-freq$count), ]
   freq$rank <- seq_len(nrow(freq))
   freq <- freq[, c("word", "rank")]
-  
+
   list(sets = make_sets_fast(words), freq = freq)
 }
 
 load_data <- function() {
   sets_file <- file.path(DATA_DIR, "sets.rds")
   freq_file <- file.path(DATA_DIR, "freq.rds")
-  
+
   if (!(file.exists(sets_file) && file.exists(freq_file))) {
     d <- build_data()
     dir.create(DATA_DIR, showWarnings = FALSE)
@@ -109,17 +112,17 @@ dfs <- function(board, r, c, current, visited, sets, found) {
   if (r < 1 || r > nrow(board) || c < 1 || c > ncol(board)) return(invisible())
   # Tile already used in this path?
   if (visited[r, c]) return(invisible())
-  
+
   current <- paste0(current, board[r, c])
-  
+
   # Prune: no word starts with this string
   if (!exists(current, envir = sets$prefixes, inherits = FALSE)) return(invisible())
-  
+
   # Record real words (dictionary is already 3+ letters)
   if (exists(current, envir = sets$words, inherits = FALSE)) {
     assign(current, TRUE, envir = found)
   }
-  
+
   # R copies `visited` on modify, so backtracking is automatic
   visited[r, c] <- TRUE
   for (dr in -1:1) {
@@ -161,7 +164,14 @@ seg <- function(id, labels, values, selected) {
 }
 
 css <- "
+  html { -webkit-text-size-adjust:100%; }
   body { background:#fafafa; color:#222; }
+  /* iOS Safari adds its own inset shadows, rounding and margins to inputs/buttons */
+  .cell, #search, .btn-main, .btn-quiet, .seg button {
+    -webkit-appearance:none; appearance:none; margin:0;
+    -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
+  .cell { -webkit-text-fill-color:#222; line-height:1; border-radius:10px; }
+  table.words th { -webkit-user-select:none; }
   .wrap { max-width:460px; margin:0 auto; padding:24px 16px 60px; }
   h1 { font-size:26px; text-align:center; margin:8px 0 20px; font-weight:700; }
   .board { display:grid; grid-template-columns:repeat(4,1fr); gap:8px;
@@ -240,7 +250,10 @@ js <- "
   });
 
   // Select the tile's contents on focus so typing replaces it
-  $(document).on('focus', '.cell', function() { this.select(); });
+  $(document).on('focus', '.cell', function() {
+    var el = this;
+    setTimeout(function() { try { el.setSelectionRange(0, 99); } catch (e) {} }, 0);
+  });
   $(document).on('mouseup', '.cell', function(e) { e.preventDefault(); });
 
   $(document).on('click', '#solve', solveBoard);
@@ -319,12 +332,15 @@ js <- "
 
 ui <- fluidPage(
   title = "Nathaniel's Thanksgiving Boggle Solver!",
-  tags$head(tags$style(HTML(css)), tags$script(HTML(js))),
-  
+  tags$head(
+    tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
+    tags$style(HTML(css)), tags$script(HTML(js))
+  ),
+
   div(
     class = "wrap",
     h1("Nathaniel's Thanksgiving", tags$br(), "Boggle Solver!"),
-    
+
     div(
       class = "board",
       lapply(1:16, function(i) {
@@ -333,15 +349,15 @@ ui <- fluidPage(
                    autocorrect = "off", spellcheck = "false")
       })
     ),
-    
+
     div(class = "msg", textOutput("msg")),
-    
+
     div(
       class = "actions",
       tags$button(id = "solve", type = "button", class = "btn-main", "Find words"),
       tags$button(id = "clear", type = "button", class = "btn-quiet", "Clear")
     ),
-    
+
     conditionalPanel(
       condition = "output.has_results",
       div(
@@ -362,83 +378,87 @@ ui <- fluidPage(
 # ---- Server -------------------------------------------------------------------
 
 server <- function(input, output, session) {
-  
+
   results <- reactiveVal(NULL)   # data frame of ALL words found for the board
   msg     <- reactiveVal("")
-  
+
   # Solve only when the button (or Enter) is used
   observeEvent(input$board, {
     cells <- toupper(trimws(unlist(input$board)))
-    
+
     if (length(cells) != 16 || any(!grepl("^[A-Z]+$", cells))) {
       msg("Fill in all 16 tiles first.")
       results(NULL)
       return()
     }
-    
+
     cells[cells == "Q"] <- "QU"
     board <- matrix(cells, nrow = 4, byrow = TRUE)
-    
+
     found <- solve_boggle(board, DATA$sets)
     df <- data.frame(word = found, stringsAsFactors = FALSE)
     df$rank <- DATA$freq$rank[match(df$word, DATA$freq$word)]
-    
+
     msg("")
     results(df)
   })
-  
+
   # Clear the results (and the search box) when the Clear button is pressed
   observeEvent(input$clear, {
     results(NULL)
     msg("")
     updateTextInput(session, "search", value = "")
   })
-  
+
+  # Wait until typing pauses before filtering, so a server hosted app is not
+  # hit with a request on every keystroke
+  search_text <- debounce(reactive(input$search), 300)
+
   # Filters are cheap and re-run instantly; they never re-solve the board
   filtered <- reactive({
     df <- results()
     req(df, input$min_len, input$common)
-    
+
     df <- df[nchar(df$word) >= input$min_len, , drop = FALSE]
-    
+
     cutoff <- LEVELS[[as.integer(input$common)]]
     if (is.finite(cutoff)) {
       df <- df[!is.na(df$rank) & df$rank <= cutoff, , drop = FALSE]
     }
-    
+
     # Search box: match anywhere in the word, ignoring case
-    q <- toupper(trimws(paste0(input$search, "")))
+    q <- toupper(trimws(paste0(search_text(), "")))
     if (nzchar(q)) {
       df <- df[grepl(q, df$word, fixed = TRUE), , drop = FALSE]
     }
-    
+
     # Longest words first, alphabetical within each length
     df <- df[order(-nchar(df$word), df$word), , drop = FALSE]
     data.frame(Word = df$word, Letters = nchar(df$word), stringsAsFactors = FALSE)
   })
-  
+
   output$has_results <- reactive(!is.null(results()))
   outputOptions(output, "has_results", suspendWhenHidden = FALSE)
-  
+
   output$msg <- renderText(msg())
-  
+
   output$count <- renderText({
     n <- nrow(filtered())
     if (n == 0) "No words match. Try loosening the filters."
     else paste(n, if (n == 1) "word" else "words")
   })
-  
+
   # Plain HTML table (no DT, so far fewer packages download in the browser)
   output$table <- renderUI({
     df <- filtered()
     req(nrow(df) > 0)
     div(class = "tbl-wrap",
-        tags$table(class = "words",
-                   tags$thead(tags$tr(tags$th("Word"), tags$th("Letters"))),
-                   tags$tbody(lapply(seq_len(nrow(df)), function(i) {
-                     tags$tr(tags$td(df$Word[i]), tags$td(df$Letters[i]))
-                   }))
-        )
+      tags$table(class = "words",
+        tags$thead(tags$tr(tags$th("Word"), tags$th("Letters"))),
+        tags$tbody(lapply(seq_len(nrow(df)), function(i) {
+          tags$tr(tags$td(df$Word[i]), tags$td(df$Letters[i]))
+        }))
+      )
     )
   })
 }
